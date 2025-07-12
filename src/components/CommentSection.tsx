@@ -1,6 +1,6 @@
 import { useState } from "react";
 import useAuth from "../context/AuthContext";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"; // Added useQueryClient
 import { supabase } from "../supabase-client";
 import { CommentItem } from "./CommentItem";
 
@@ -13,7 +13,7 @@ interface NewComment {
     parent_comment_id?: number | null;
 }
 
-export interface Comment {
+export interface PostComment {
     id: number;
     content: string;
     post_id: number;
@@ -21,6 +21,11 @@ export interface Comment {
     user_id: string;
     created_at: string;
     author: string;
+}
+
+// Extended type for comment tree
+interface CommentWithChildren extends PostComment {
+    children?: CommentWithChildren[];
 }
 
 const createComment = async (newComment: NewComment, postId: number, userId?: string, author?: string) => {
@@ -31,17 +36,17 @@ const createComment = async (newComment: NewComment, postId: number, userId?: st
     const { error } = await supabase.from("comments").insert({
         content: newComment.content,
         post_id: postId,
-        parent_comment_id: newComment.parent_comment_id || null, // Set parent_comment_id to null if it's not provided: userId,
+        parent_comment_id: newComment.parent_comment_id || null,
         user_id: userId,
         author: author,
-    })
+    });
 
     if (error) {
         throw new Error(error.message);
     }
 };
 
-const fetchComments = async (postId: number): Promise<Comment[]> => {
+const fetchComments = async (postId: number): Promise<PostComment[]> => {
     const { data, error } = await supabase
         .from("comments")
         .select("*")
@@ -50,40 +55,41 @@ const fetchComments = async (postId: number): Promise<Comment[]> => {
 
     if (error) throw new Error(error.message);
 
-    return data as Comment[];
+    return data as PostComment[];
 };
 
 export const CommentSection = ({ postId }: Props) => {
     const [newCommentText, setNewCommentText] = useState<string>("");
     const { user } = useAuth();
+    const queryClient = useQueryClient(); // For refetching comments after mutation
 
-    const { data: comments, isLoading, error } = useQuery<Comment[], Error>({
-      queryKey: ["comments", postId],
-      queryFn: () => fetchComments(postId),
-      refetchInterval: 5000
-    })
+    const { data: comments, isLoading, error } = useQuery<PostComment[], Error>({
+        queryKey: ["comments", postId],
+        queryFn: () => fetchComments(postId),
+        refetchInterval: 5000,
+    });
 
-    const {mutate, isPending, isError} = useMutation({
+    const { mutate, isPending, isError } = useMutation({
         mutationFn: (newComment: NewComment) => createComment(newComment, postId, user?.id, user?.user_metadata?.user_name),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["comments", postId] }); // Refetch comments after posting
+        },
     });
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
+        if (!newCommentText) return;
+        mutate({ content: newCommentText, parent_comment_id: null });
+        setNewCommentText("");
+    };
 
-        if (!newCommentText) return
-
-        mutate({content: newCommentText, parent_comment_id: null})
-
-        setNewCommentText(""); // Clear the input after submission
-    }
-
-    {/* Map of comments - organise repies - return tree */}
-    const buildCommentTree = (flatComments: Comment[]): (Comment & {children?: Comment[]})[] => {
-        const map = new Map<number, Comment & {children?: Comment[]}>();
-        const roots: (Comment & {children?: Comment[]})[] = [];
+    // Updated to use PostComment and correct typing
+    const buildCommentTree = (flatComments: PostComment[]): CommentWithChildren[] => {
+        const map = new Map<number, CommentWithChildren>();
+        const roots: CommentWithChildren[] = [];
 
         flatComments.forEach((comment) => {
-            map.set(comment.id, {...comment, children: []});
+            map.set(comment.id, { ...comment, children: [] });
         });
 
         flatComments.forEach((comment) => {
@@ -97,38 +103,52 @@ export const CommentSection = ({ postId }: Props) => {
             }
         });
 
-        return roots
-    }
+        return roots;
+    };
 
     if (isLoading) {
-        return <div>Loading comments...</div>
+        return <div>Loading comments...</div>;
     }
 
     if (error) {
-        return <div>Error: {error.message}</div>
+        return <div>Error: {error.message}</div>;
     }
 
-    const commentTree = comments ? buildCommentTree(comments) :[]
+    const commentTree = comments ? buildCommentTree(comments) : [];
 
-    return <div className="mt-6">
-        <h3 className="text-2xl font-semibold mb-4">Comments</h3>
+    return (
+        <div className="mt-6">
+            <h3 className="text-2xl font-semibold mb-4">Comments</h3>
 
-        {/* Create comment section */}
-        {user ? (
-            <form onSubmit={handleSubmit} className="mb-4">
-                <textarea value={newCommentText} rows={3} className="w-full border border-white/10 bg-transparent p-2 rounded" placeholder="Write a comment..." onChange={(e) => setNewCommentText(e.target.value)} />
-                <button type="submit" className="mt-2 bg-purple-500 text-white px-4 py-2 rounded cursor-pointer">{isPending ? "Posting..." : "Post Comment"}</button>
-                {isError && <p className="text-red-500 mt-2">Error posting comment</p>}
-            </form>
-        ) : (
-            <p className="mb-4 text-gray-600">You must be logged in to post a comment</p>
-        )}
+            {/* Create comment section */}
+            {user ? (
+                <form onSubmit={handleSubmit} className="mb-4">
+                    <textarea
+                        value={newCommentText}
+                        rows={3}
+                        className="w-full border border-white/10 bg-transparent p-2 rounded"
+                        placeholder="Write a comment..."
+                        onChange={(e) => setNewCommentText(e.target.value)}
+                    />
+                    <button
+                        type="submit"
+                        className="mt-2 bg-purple-500 text-white px-4 py-2 rounded cursor-pointer"
+                        disabled={isPending}
+                    >
+                        {isPending ? "Posting..." : "Post Comment"}
+                    </button>
+                    {isError && <p className="text-red-500 mt-2">Error posting comment</p>}
+                </form>
+            ) : (
+                <p className="mb-4 text-gray-600">You must be logged in to post a comment</p>
+            )}
 
-        {/* Comment display section */}
-        <div className="space-y-4">
-            {commentTree.map((comment, key) => (
-                <CommentItem key={key} comment={comment} postId={postId} />
-            ))}
+            {/* Comment display section */}
+            <div className="space-y-4">
+                {commentTree.map((comment) => (
+                    <CommentItem key={comment.id} comment={comment} postId={postId} />
+                ))}
+            </div>
         </div>
-    </div>
-}
+    );
+};
