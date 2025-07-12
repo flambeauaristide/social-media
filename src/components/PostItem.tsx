@@ -22,7 +22,6 @@ export const PostItem = ({ post }: Props) => {
                         <div className="text-[20px] leading-[22px] font-semibold mt-2">{post.title}</div>
                     </div>
                 </div>
-            </div>
 
             {/* Image banner */}
             <div className="mt-2 flex-1">
@@ -35,6 +34,7 @@ export const PostItem = ({ post }: Props) => {
                 <span className="cursor-pointer h-10 w-[50px] px-1 flex items-center justify-center font-extrabold rounded-lg">💬
                     <span className="ml-2">{post.comment_count ?? 0}</span>
                 </span>
+                </div>
             </div>
         </Link>
     </div>
